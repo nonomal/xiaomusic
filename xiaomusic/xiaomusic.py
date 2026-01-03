@@ -2,12 +2,14 @@
 import asyncio
 import base64
 import copy
+import ipaddress
 import json
 import logging
 import math
 import os
 import random
 import re
+import socket
 import time
 import urllib.parse
 from collections import OrderedDict
@@ -53,6 +55,7 @@ from xiaomusic.utils import (
     chmodfile,
     custom_sort_key,
     deepcopy_data_no_sensitive_info,
+    downloadfile,
     extract_audio_metadata,
     find_best_match,
     fuzzyfinder,
@@ -78,6 +81,7 @@ class XiaoMusic:
         self.session = None
         self.last_timestamp = {}  # key为 did. timestamp last call mi speaker
         self.last_record = None
+        self.last_cmd = ""  # <--- 【新增这行】初始化变量
         self.cookie_jar = None
         self.mina_service = None
         self.miio_service = None
@@ -1058,6 +1062,7 @@ class XiaoMusic:
     # 匹配命令
     async def do_check_cmd(self, did="", query="", ctrl_panel=True, **kwargs):
         self.log.info(f"收到消息:{query} 控制面板:{ctrl_panel} did:{did}")
+        self.last_cmd = query  # <--- 【新增这行】无论来自Web还是语音，先存下来
         try:
             opvalue, oparg = self.match_cmd(did, query, ctrl_panel)
             if not opvalue:
@@ -1232,6 +1237,18 @@ class XiaoMusic:
         self._gen_all_music_list()
         self.log.info("gen_music_list ok")
 
+    # 更新网络歌单
+    async def refresh_web_music_list(self, **kwargs):
+        url = self.config.music_list_url
+        if url:
+            self.log.debug(f"refresh_web_music_list begin url:{url}")
+            content = await downloadfile(url)
+            self.config.music_list_json = content
+            # 配置文件落地
+            self.save_cur_config()
+            self.log.debug(f"refresh_web_music_list url:{url} content:{content}")
+        self.log.info(f"refresh_web_music_list ok {url}")
+
     # 删除歌曲
     async def cmd_del_music(self, did="", arg1="", **kwargs):
         if not self.config.enable_cmd_del_music:
@@ -1305,11 +1322,57 @@ class XiaoMusic:
 
         import aiohttp
 
+        # 内部辅助函数：检查主机解析到的IP是否安全，防止访问内网/本地地址
+        def _is_safe_hostname(parsed) -> bool:
+            hostname = parsed.hostname
+            if not hostname:
+                return False
+            try:
+                # 解析主机名对应的所有地址
+                addrinfo_list = socket.getaddrinfo(hostname, None)
+            except Exception:
+                return False
+            for family, _, _, _, sockaddr in addrinfo_list:
+                ip_str = (
+                    sockaddr[0] if family in (socket.AF_INET, socket.AF_INET6) else None
+                )
+                if not ip_str:
+                    continue
+                try:
+                    ip_obj = ipaddress.ip_address(ip_str)
+                except ValueError:
+                    return False
+                # 拒绝内网、回环、链路本地、多播和保留地址
+                if (
+                    ip_obj.is_private
+                    or ip_obj.is_loopback
+                    or ip_obj.is_link_local
+                    or ip_obj.is_multicast
+                    or ip_obj.is_reserved
+                ):
+                    return False
+            return True
+
         try:
             # 验证URL格式
             parsed_url = urlparse(url)
             if not parsed_url.scheme or not parsed_url.netloc:
                 return {"success": False, "url": url, "error": "Invalid URL format"}
+            # 仅允许 http/https
+            if parsed_url.scheme not in ("http", "https"):
+                return {
+                    "success": False,
+                    "url": url,
+                    "error": "Unsupported URL scheme",
+                }
+            # 检查主机是否安全，防止SSRF到内网
+            if not _is_safe_hostname(parsed_url):
+                return {
+                    "success": False,
+                    "url": url,
+                    "error": "Unsafe target host",
+                }
+
             # 创建aiohttp客户端会话
             async with aiohttp.ClientSession() as session:
                 # 发送HEAD请求跟随重定向
@@ -2192,6 +2255,7 @@ class XiaoMusicDevice:
             names = self.xiaomusic.find_real_music_name(
                 name, n=self.config.search_music_count
             )
+        self.log.info(f"play. names:{names} {len(names)}")
         if len(names) > 0:
             if not exact:
                 if len(names) > 1:  # 大于一首歌才更新
@@ -2210,7 +2274,10 @@ class XiaoMusicDevice:
             self.log.debug(
                 f"当前播放列表为：{list2str(self._play_list, self.config.verbose)}"
             )
+            # 本地存在歌曲，直接播放
+            await self._playmusic(name)
         elif not self.xiaomusic.is_music_exist(name):
+            self.log.inf(f"本地不存在歌曲{name}")
             if self.config.disable_download:
                 await self.do_tts(f"本地不存在歌曲{name}")
                 return
@@ -2220,9 +2287,6 @@ class XiaoMusicDevice:
                 # 把文件插入到播放列表里
                 await self.add_download_music(name)
                 await self._playmusic(name)
-        else:
-            # 本地存在歌曲，直接播放
-            await self._playmusic(name)
 
     # 下一首
     async def play_next(self):
@@ -2305,11 +2369,13 @@ class XiaoMusicDevice:
                 f"当前播放列表为：{list2str(self._play_list, self.config.verbose)}"
             )
         elif not self.xiaomusic.is_music_exist(name):
+            self.log.info(f"本地不存在歌曲{name}")
             await self.do_tts(f"本地不存在歌曲{name}")
             return
         await self._playmusic(name)
 
     async def _playmusic(self, name, true_url=None):
+        self.log.info(f"_playmusic. name:{name} true_url:{true_url}")
         # 取消组内所有的下一首歌曲的定时器
         self.cancel_group_next_timer()
 
@@ -2323,7 +2389,7 @@ class XiaoMusicDevice:
         self.log.info(f"播放 {url}")
         # 有3方设备打开 /static/3thplay.html 通过socketio连接返回true 忽律小爱音箱的播放
         online = await thdplay("play", url, self.xiaomusic.thdtarget)
-        self.log.error(f"IS online {online}")
+        self.log.info(f"IS online {online}")
 
         if not online:
             results = await self.group_player_play(url, name)
