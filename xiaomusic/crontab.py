@@ -4,7 +4,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 
-from xiaomusic.holiday import is_off_day, is_working_day
+from xiaomusic.holiday import (
+    is_off_day,
+    is_working_day,
+)
 
 
 class CustomCronTrigger(BaseTrigger):
@@ -64,7 +67,7 @@ class Crontab:
     def start(self):
         self.scheduler.start()
 
-    def add_job(self, expression, job):
+    def add_job(self, expression, job, coalesce=True):
         try:
             # 检查表达式中是否包含注释标记
             if "#" in expression and (
@@ -74,7 +77,13 @@ class Crontab:
             else:
                 trigger = CronTrigger.from_crontab(expression)
 
-            self.scheduler.add_job(job, trigger)
+            # 添加任务配置：
+            # coalesce: 如果任务错过了多次执行，是否只执行一次（默认True，适合播放类任务）
+            # max_instances=30: 允许同时运行最多30个实例，支持多设备并发
+            # misfire_grace_time=60: 任务延迟60秒内仍然执行
+            self.scheduler.add_job(
+                job, trigger, coalesce=coalesce, max_instances=30, misfire_grace_time=60
+            )
         except ValueError as e:
             self.log.error(f"Invalid crontab expression {e}")
         except Exception as e:
@@ -98,6 +107,20 @@ class Crontab:
     def add_job_play_music_list(self, expression, xiaomusic, did, arg1, **kwargs):
         async def job():
             await xiaomusic.play_music_list(did, arg1)
+
+        self.add_job(expression, job)
+
+    # 添加播放自定义列表任务
+    def add_job_play_music_tmp_list(self, expression, xiaomusic, did, arg1, **kwargs):
+        async def job():
+            name = arg1 or "crontab_tmp_list"
+            cron = kwargs["cron"]
+            music_list = cron["music_list"]
+            music_name = cron.get("first", "")
+            ret = xiaomusic.play_list_update_music(name, music_list)
+            if not ret:
+                self.log.warning(f"crontb play_list_update_music failed name:{name}")
+            await xiaomusic.do_play_music_list(did, name, music_name)
 
         self.add_job(expression, job)
 
@@ -140,6 +163,14 @@ class Crontab:
 
         self.add_job(expression, job)
 
+    # 更新网络歌单
+    def add_job_refresh_web_music_list(self, expression, xiaomusic, **kwargs):
+        async def job():
+            await xiaomusic.refresh_web_music_list()
+            await xiaomusic.gen_music_list()
+
+        self.add_job(expression, job)
+
     # 重新初始化
     def add_job_reinit(self, expression, xiaomusic, did, arg1, **kwargs):
         async def job():
@@ -155,7 +186,7 @@ class Crontab:
         jobname = f"add_job_{name}"
         func = getattr(self, jobname, None)
         if callable(func):
-            func(expression, xiaomusic, did=did, arg1=arg1)
+            func(expression, xiaomusic, did=did, arg1=arg1, cron=cron)
             self.log.info(
                 f"crontab add_job_cron ok. did:{did}, name:{name}, arg1:{arg1} expression:{expression}"
             )

@@ -94,7 +94,7 @@ class Config:
     temp_path: str = os.getenv("XIAOMUSIC_TEMP_PATH", "music/tmp")
     download_path: str = os.getenv("XIAOMUSIC_DOWNLOAD_PATH", "music/download")
     conf_path: str = os.getenv("XIAOMUSIC_CONF_PATH", "conf")
-    cache_dir: str = os.getenv("XIAOMUSIC_CACHE_DIR", "cache")
+    cache_dir: str = os.getenv("XIAOMUSIC_CACHE_DIR", "music/cache")
     hostname: str = os.getenv("XIAOMUSIC_HOSTNAME", "192.168.2.5")
     port: int = int(os.getenv("XIAOMUSIC_PORT", "8090"))  # 监听端口
     public_port: int = int(os.getenv("XIAOMUSIC_PUBLIC_PORT", 0))  # 歌曲访问端口
@@ -153,6 +153,7 @@ class Config:
     keywords_play: str = os.getenv("XIAOMUSIC_KEYWORDS_PLAY", "播放歌曲,放歌曲")
     keywords_search_play: str = os.getenv("XIAOMUSIC_KEYWORDS_SEARCH_PLAY", "搜索播放")
     keywords_online_play: str = os.getenv("XIAOMUSIC_KEYWORDS_ONLINE_PLAY", "在线播放")
+    keywords_singer_play: str = os.getenv("XIAOMUSIC_KEYWORDS_SINGER_PLAY", "播放歌手")
     keywords_stop: str = os.getenv("XIAOMUSIC_KEYWORDS_STOP", "关机,暂停,停止,停止播放")
     keywords_playlist: str = os.getenv(
         "XIAOMUSIC_KEYWORDS_PLAYLIST", "播放列表,播放歌单"
@@ -184,7 +185,7 @@ class Config:
     )  # 监控刷新延迟时间(秒)
     pull_ask_sec: int = int(os.getenv("XIAOMUSIC_PULL_ASK_SEC", "1"))
     enable_pull_ask: bool = (
-        os.getenv("XIAOMUSIC_ENABLE_PULL_ASK", "true").lower() == "true"
+        os.getenv("XIAOMUSIC_ENABLE_PULL_ASK", "false").lower() == "true"
     )
     crontab_json: str = os.getenv("XIAOMUSIC_CRONTAB_JSON", "")  # 定时任务
     enable_yt_dlp_cookies: bool = (
@@ -225,7 +226,7 @@ class Config:
     search_music_count: int = int(os.getenv("XIAOMUSIC_SEARCH_MUSIC_COUNT", "100"))
     # 网络歌曲使用proxy
     web_music_proxy: bool = (
-        os.getenv("XIAOMUSIC_WEB_MUSIC_PROXY", "false").lower() == "true"
+        os.getenv("XIAOMUSIC_WEB_MUSIC_PROXY", "true").lower() == "true"
     )
 
     def append_keyword(self, keys, action):
@@ -249,6 +250,7 @@ class Config:
         self.append_keyword(self.keywords_play, "play")
         self.append_keyword(self.keywords_search_play, "search_play")
         self.append_keyword(self.keywords_online_play, "online_play")
+        self.append_keyword(self.keywords_singer_play, "singer_play")
         self.append_keyword(self.keywords_stop, "stop")
         self.append_keyword(self.keywords_playlist, "play_music_list")
         self.append_user_keyword()
